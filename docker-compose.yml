@@ -1,0 +1,56 @@
+## Compose specification version is omitted to use the latest syntax.
+
+services:
+  finetune:
+    build:
+      context: .
+    volumes:
+      - ./data:/app/data
+      - /mnt/sdb/data/ai/models/model_output:/app/model_output
+      # Mount the locally downloaded models into the container.  See README for details
+      - /mnt/sdb/data/ai/models/qwen1_5_7b:/app/local_models/qwen1_5_7b:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Train the model on the included sample data.  After training the container
+    # exits allowing dependent services to start.  You can override this
+    # command when running compose if you wish to customise the training.
+    # Use list form for command to avoid shell parsing issues.  This will
+    # fine‑tune the model on the provided sample dataset.  Modify or override
+    # these arguments to point at your own training data.  When running offline
+    # you must supply --model_path pointing at a directory inside the container
+    # containing the pretrained model and pass --offline to disable network downloads.
+    command:
+      - python
+      - train.py
+      - --model_path
+      - /app/local_models/qwen1_5_7b
+      - --train_file
+      - data/train.jsonl
+      - --eval_file
+      - data/eval.jsonl
+      - --output_dir
+      - /app/model_output
+      - --use_lora
+      - --num_epochs
+      - "1"
+      - --per_device_batch_size
+      - "1"
+      - --offline
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "8080:8080"
+    environment:
+      # Disable authentication for ease of use in local setups
+      - WEBUI_AUTH=false
+    volumes:
+      - openwebui_data:/data
+    depends_on:
+      # Open WebUI depends only on finetune.  The LLM server should be started
+      # manually outside of Docker due to network restrictions when installing
+      # dependencies.  See README for instructions.
+      - finetune
+
+volumes:
+  openwebui_data:
