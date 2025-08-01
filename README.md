@@ -17,9 +17,9 @@ minimal OpenAI‑compatible API server.
   `--use_lora` flag.  Adapter weights are saved separately so that they
   can be applied on top of the base model during inference.
 - **OpenAI‑Compatible Inference** – after training, spin up the
-  FastAPI server included in the Docker compose setup and connect it to
-  [Open WebUI](https://github.com/open-webui/open-webui) via
-  `http://localhost:8000/v1`.
+  FastAPI server in `server/api_server.py` and connect it to
+  [Open WebUI](https://github.com/open-webui/open-webui) by adding a
+  connection pointing to `http://localhost:8000/v1`.
 
 ## Quick Start
 
@@ -40,11 +40,17 @@ minimal OpenAI‑compatible API server.
       --num_epochs 1
     ```
 
-3.  Запустіть усі сервіси через Docker Compose
+3.  Запустіть API‑сервер вручну (поза Docker)
 
     ```sh
-    docker compose up
+    # Перед запуском переконайтесь, що у вашому середовищі встановлено torch,
+    # transformers, peft, fastapi та uvicorn.
+    MODEL_PATH=model_output python server/api_server.py
     ```
+
+    Через відсутність доступу до Інтернету під час збірки Docker‑образів
+    встановити ці залежності в окремому контейнері неможливо, тому сервер
+    потрібно запускати у тій системі, де вони вже є.
 
 4.  Відкрийте [Open WebUI](http://localhost:8080), перейдіть до Admin → Connections,
     створіть новий зв'язок та у полі URL вкажіть `http://localhost:8000/v1`.
@@ -72,11 +78,15 @@ minimal OpenAI‑compatible API server.
 
 ## Docker Deployment
 
-Файл `docker-compose.yml` створює три сервіси: `finetune` для навчання,
-`api` для обслуговування моделі та `openwebui` для веб‑інтерфейсу.
-Після запуску `docker compose up` модель буде натренована, API‑сервер
-автоматично запуститься на `http://localhost:8000/v1`, а Open WebUI буде
-доступним за адресою `http://localhost:8080`.
+Файл `docker-compose.yml` створює два сервіси: `finetune` для навчання
+та `openwebui` для веб‑інтерфейсу. Контейнер із API‑сервером
+довелося прибрати, оскільки в процесі збірки відсутнє інтернет‑з'єднання
+і неможливо встановити потрібні бібліотеки. Після запуску
+`docker compose up` модель буде натренована, а Open WebUI стане
+доступним за адресою `http://localhost:8080`.  Для обслуговування
+натренованої моделі запустіть `server/api_server.py` вручну, як
+описано в розділі «Quick Start», і підключіть його у веб‑інтерфейсі через
+налаштування Connections.
 
 ## Citation
 
