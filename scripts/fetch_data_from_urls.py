@@ -65,7 +65,9 @@ def build_examples(texts: Iterable[str]) -> List[dict]:
     return examples
 
 
-def split_data(data: List[dict], train_ratio: float = 0.9) -> Tuple[List[dict], List[dict]]:
+def split_data(
+    data: List[dict], train_ratio: float = 0.9
+) -> Tuple[List[dict], List[dict]]:
     """Shuffle and split data into train and eval sets."""
     random.shuffle(data)
     n_train = int(len(data) * train_ratio)
