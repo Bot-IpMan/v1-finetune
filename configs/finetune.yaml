@@ -1,0 +1,14 @@
+# Sample configuration file for fine‑tuning.
+base_model_name: Qwen/Qwen1.5-7B
+train_file: data/train.jsonl
+eval_file: data/eval.jsonl
+output_dir: /mnt/sdb/data/ai/models/model_output
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+learning_rate: 2.0e-5
+num_epochs: 3
+per_device_batch_size: 1
+gradient_accumulation_steps: 4
+use_4bit: true
