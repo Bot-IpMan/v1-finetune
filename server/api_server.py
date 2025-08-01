@@ -33,9 +33,7 @@ from peft import PeftModel
 app = FastAPI()
 
 # Read configuration from environment
-MODEL_PATH = os.environ.get(
-    "MODEL_PATH", "/mnt/sdb/data/ai/models/model_output"
-)
+MODEL_PATH = os.environ.get("MODEL_PATH", "/mnt/sdb/data/ai/models/model_output")
 BASE_MODEL_NAME = os.environ.get("BASE_MODEL_NAME", None)
 
 
@@ -145,16 +143,12 @@ def chat_completions(req: ChatRequest):
     with torch.no_grad():
         output_ids = model.generate(**inputs, **generation_kwargs)
     # Extract only the generated part
-    generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
-    generated_text = tokenizer.decode(
-        generated_ids, skip_special_tokens=True
-    )
+    generated_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
+    generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
     response_message = ChatMessage(role="assistant", content=generated_text)
     return ChatResponse(
         id="cmpl-1",
         object="chat.completion",
-        choices=[
-            Choice(message=response_message, index=0, finish_reason="stop")
-        ],
+        choices=[Choice(message=response_message, index=0, finish_reason="stop")],
         usage={},
     )
