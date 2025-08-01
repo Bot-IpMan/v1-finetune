@@ -232,6 +232,12 @@ def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.offline:
+        # Disable all network calls from Hugging Face libraries
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["HF_DATASETS_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
     # If URLs are provided build a dataset on the fly.  Offline mode forbids network calls.
     if args.urls or args.url_file:
         if args.offline:
