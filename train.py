@@ -195,7 +195,9 @@ def get_datasets(train_file: Optional[str], eval_file: Optional[str]) -> Dict[st
     return ds
 
 
-def tokenize_function(example: Dict[str, Any], tokenizer: AutoTokenizer) -> Dict[str, Any]:
+def tokenize_function(
+    example: Dict[str, Any], tokenizer: AutoTokenizer
+) -> Dict[str, Any]:
     """Convert a chat conversation into model input and labels.
 
     Each example must contain a ``messages`` key with a list of chat turns.  The
@@ -247,7 +249,9 @@ def main() -> None:
             urls.extend(u.strip() for u in args.urls.split(",") if u.strip())
         if args.url_file:
             with open(args.url_file, "r", encoding="utf‑8") as f:
-                urls.extend(line.strip() for line in f.read().splitlines() if line.strip())
+                urls.extend(
+                    line.strip() for line in f.read().splitlines() if line.strip()
+                )
         random.shuffle(urls)
         if not urls:
             raise ValueError("No URLs provided.")
@@ -273,13 +277,17 @@ def main() -> None:
         if os.path.isdir(custom_text_dir):
             for fname in os.listdir(custom_text_dir):
                 fpath = os.path.join(custom_text_dir, fname)
-                if os.path.isfile(fpath) and fname.lower().endswith((".txt", ".md", ".html")):
+                if os.path.isfile(fpath) and fname.lower().endswith(
+                    (".txt", ".md", ".html")
+                ):
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                         collected_texts.append(f.read())
         # Read URLs from data/custom/urls.txt
         if os.path.exists(custom_url_file):
             with open(custom_url_file, "r", encoding="utf-8") as f:
-                collected_urls += [line.strip() for line in f.read().splitlines() if line.strip()]
+                collected_urls += [
+                    line.strip() for line in f.read().splitlines() if line.strip()
+                ]
         # If we found any texts or urls, build a dataset on the fly
         if collected_texts or collected_urls:
             tmp_train = os.path.join(args.output_dir, "custom_train.jsonl")
@@ -287,7 +295,9 @@ def main() -> None:
             # Write text examples directly
             examples: List[Dict[str, Any]] = []
             for t in collected_texts:
-                prompt = f"Будь ласка, зроби короткий стислий виклад наступного тексту: {t}"
+                prompt = (
+                    f"Будь ласка, зроби короткий стислий виклад наступного тексту: {t}"
+                )
                 examples.append(
                     {
                         "messages": [
@@ -299,8 +309,12 @@ def main() -> None:
             # Fetch and add URL examples if needed
             if collected_urls:
                 if fetch_data_from_urls is None:
-                    raise RuntimeError("requests/bs4 are required for URL fetching but are not installed.")
-                _train_data, _eval_data = fetch_data_from_urls(collected_urls, tmp_train, tmp_eval)
+                    raise RuntimeError(
+                        "requests/bs4 are required for URL fetching but are not installed."
+                    )
+                _train_data, _eval_data = fetch_data_from_urls(
+                    collected_urls, tmp_train, tmp_eval
+                )
                 # Append url examples to examples list
                 examples += _train_data + _eval_data
             # Split examples into train/eval
@@ -324,7 +338,9 @@ def main() -> None:
     # When offline, require a local model path
     base_model_source = args.model_path or args.base_model_name
     if args.offline and args.model_path is None:
-        print("Offline mode requires --model_path to point to a locally available pretrained model.")
+        print(
+            "Offline mode requires --model_path to point to a locally available pretrained model."
+        )
         return
     tokenizer = AutoTokenizer.from_pretrained(base_model_source, trust_remote_code=True)
     # Make sure the tokenizer uses the correct padding side and tokens
@@ -373,7 +389,15 @@ def main() -> None:
         lora_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
@@ -386,7 +410,9 @@ def main() -> None:
     # ``num_proc must be <= 1`` messages were emitted for small datasets.
     processed_datasets: Dict[str, Any] = {}
     for split in datasets.keys():
-        num_examples = len(datasets[split]) if hasattr(datasets[split], "__len__") else 1
+        num_examples = (
+            len(datasets[split]) if hasattr(datasets[split], "__len__") else 1
+        )
         # Use at most len(datasets[split]) workers but no more than available CPUs
         max_procs = os.cpu_count() or 1
         num_proc = min(max_procs, max(1, num_examples))
@@ -438,7 +464,9 @@ def main() -> None:
     if args.use_lora:
         model.save_pretrained(args.output_dir)
         # also save base model name so the inference script can reconstruct the model
-        with open(os.path.join(args.output_dir, "base_model_name.txt"), "w", encoding="utf‑8") as f:
+        with open(
+            os.path.join(args.output_dir, "base_model_name.txt"), "w", encoding="utf‑8"
+        ) as f:
             f.write(args.base_model_name)
     else:
         trainer.save_model(args.output_dir)
