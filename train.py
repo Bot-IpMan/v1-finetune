@@ -258,8 +258,10 @@ def tokenize_function(
     """
 
     if "messages" in example:
+        messages = example["messages"]
+        add_gen_prompt = messages[-1].get("role") != "assistant"
         prompt = tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=add_gen_prompt
         )
     elif "prompt" in example and "completion" in example:
         messages = [
