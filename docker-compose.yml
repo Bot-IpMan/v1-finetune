@@ -78,8 +78,12 @@ services:
       - OPENAI_API_BASE_URL=http://api:8000/v1
       - OPENAI_API_KEY=dummy
       - DEFAULT_MODELS=qwen-finetuned
+      - MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct
+      - LLM_ADAPTER=/app/model_output
     volumes:
       - openwebui_data:/data
+      - /mnt/sdb/data/ai/models/model_output:/app/model_output:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface:ro
     networks:
       - ai_network
     depends_on:
