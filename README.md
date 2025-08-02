@@ -95,6 +95,20 @@ standard causal language modelling regardless of format.
 автоматично запуститься на `http://localhost:8000/v1`, а Open WebUI буде
 доступним за адресою `http://localhost:8080`.
 
+### Завантаження LoRA через змінні середовища
+
+Сервіс `openwebui` монтує результати навчання до `/app/model_output` і
+використовує змінні середовища `MODEL_ID` та `LLM_ADAPTER`, щоб одразу
+підвантажити базову модель та адаптер LoRA. За замовчуванням у
+`docker-compose.yml` вказано:
+
+```yaml
+MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct
+LLM_ADAPTER=/app/model_output
+```
+
+За потреби змініть ці значення на власні шляхи або ідентифікатори моделі.
+
 ## Citation
 
 The inference server is compatible with any client that speaks the
