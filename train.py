@@ -242,18 +242,40 @@ def get_datasets(train_file: Optional[str], eval_file: Optional[str]) -> Dict[st
 def tokenize_function(
     example: Dict[str, Any], tokenizer: AutoTokenizer, max_length: int = 2048
 ) -> Dict[str, Any]:
-    """Convert a chat conversation into model input and labels.
+    """Tokenize a dataset example for causal language modelling.
 
-    Each example must contain a ``messages`` key with a list of chat turns.  The
-    tokenizer's chat template is applied to assemble the conversation into a single
-    prompt string.  Labels are identical to ``input_ids``; the Trainer will
-    automatically apply the causal mask.
+    The function is flexible with respect to input format:
+
+    - If ``messages`` is present, it should be a list of chat turns compatible
+      with the tokenizer's chat template.
+    - If ``prompt``/``completion`` fields are present, they will be converted
+      into a two turn conversation of user → assistant.
+    - If a plain ``text`` field is provided, the text is used directly for
+      language‑model style training without any chat template.
+
+    Regardless of the input style, labels mirror ``input_ids`` so that the
+    trainer performs standard causal language modelling.
     """
-    messages = example["messages"]
-    # Add the generation prompt to enable the model to continue the conversation.
-    prompt = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+
+    if "messages" in example:
+        prompt = tokenizer.apply_chat_template(
+            example["messages"], tokenize=False, add_generation_prompt=True
+        )
+    elif "prompt" in example and "completion" in example:
+        messages = [
+            {"role": "user", "content": example["prompt"]},
+            {"role": "assistant", "content": example["completion"]},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+    elif "text" in example:
+        prompt = example["text"]
+    else:
+        raise KeyError(
+            "Dataset examples must contain 'messages', 'prompt'/'completion' or 'text' keys"
+        )
+
     tokenized = tokenizer(
         prompt,
         return_attention_mask=True,
@@ -264,8 +286,7 @@ def tokenize_function(
     )
     input_ids = tokenized["input_ids"][0]
     attention_mask = tokenized["attention_mask"][0]
-    # Labels are the same as input_ids for causal language modelling
-    labels = input_ids.clone()
+    labels = input_ids.clone()  # Labels are the same as input_ids for causal LM
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
