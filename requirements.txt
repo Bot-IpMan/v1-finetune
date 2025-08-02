@@ -15,3 +15,6 @@ pyyaml>=6.0
 # API server dependencies
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
+
+# Optional summarization support
+sumy>=0.11.0
