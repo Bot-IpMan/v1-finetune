@@ -29,11 +29,11 @@ minimal OpenAI‑compatible API server.
     pip install -r requirements.txt
     ```
 
-2.  Fetch some training data from the web and fine‑tune the model
+2.  Fetch some training data from the web and fine‑tune the [Qwen/Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct) model
 
     ```sh
     python train.py \
-      --base_model_name Qwen/Qwen1.5-7B \
+      --base_model_name Qwen/Qwen2.5-VL-7B-Instruct \
       --urls https://en.wikipedia.org/wiki/Artificial_intelligence,https://en.wikipedia.org/wiki/Machine_learning \
       --output_dir model_output \
       --use_lora \
@@ -103,7 +103,7 @@ standard causal language modelling regardless of format.
 `docker-compose.yml` вказано:
 
 ```yaml
-MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct
+MODEL_ID=Qwen/Qwen2.5-VL-7B-Instruct
 LLM_ADAPTER=/app/model_output
 ```
 

@@ -16,7 +16,7 @@ Environment variables:
 
 Example:
 
-    MODEL_PATH=/models/finetuned BASE_MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct uvicorn api_server:app
+    MODEL_PATH=/models/finetuned BASE_MODEL_NAME=Qwen/Qwen2.5-VL-7B-Instruct uvicorn api_server:app
 """
 
 from __future__ import annotations

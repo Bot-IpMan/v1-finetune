@@ -35,7 +35,7 @@ The high‑level workflow is unchanged:
 
 Example usage::
 
-    python train.py --base_model_name Qwen/Qwen1.5-7B \
+    python train.py --base_model_name Qwen/Qwen2.5-VL-7B-Instruct \
         --train_file data/train.jsonl \
         --eval_file data/eval.jsonl \
         --output_dir model_output \
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base_model_name",
         type=str,
-        default="Qwen/Qwen1.5-7B",
+        default="Qwen/Qwen2.5-VL-7B-Instruct",
         help="HF name or path of the base model to load.",
     )
     parser.add_argument(
