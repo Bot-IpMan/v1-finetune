@@ -333,17 +333,45 @@ def collect_custom_data(args: argparse.Namespace) -> tuple[Optional[str], Option
     
     tmp_train = os.path.join(args.output_dir, "custom_train.jsonl")
     tmp_eval = os.path.join(args.output_dir, "custom_eval.jsonl")
-    
+
+    def _summarize(text: str) -> Optional[str]:
+        """Generate a brief summary for ``text``.
+
+        Attempts to use ``sumy`` when available; otherwise returns ``None`` to
+        signal that the text should be skipped."""
+        try:
+            from sumy.nlp.tokenizers import Tokenizer
+            from sumy.parsers.plaintext import PlaintextParser
+            from sumy.summarizers.lsa import LsaSummarizer
+
+            parser = PlaintextParser.from_string(text, Tokenizer("english"))
+            summarizer = LsaSummarizer()
+            sentences = summarizer(parser.document, 1)
+            summary = " ".join(str(s) for s in sentences).strip()
+            return summary or None
+        except Exception as e:  # pragma: no cover - best effort
+            logger.warning(f"Failed to summarize text: {e}")
+            return None
+
     # Write text examples directly
     examples: List[Dict[str, Any]] = []
     for t in collected_texts:
-        prompt = f"Будь ласка, зроби короткий стислий виклад наступного тексту: {t}"
-        examples.append({
-            "messages": [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": ""},
-            ]
-        })
+        summary = _summarize(t)
+        if not summary:
+            logger.warning("Skipping text without a generated summary")
+            continue
+        prompt = (
+            "Будь ласка, зроби короткий стислий виклад наступного тексту: "
+            f"{t}"
+        )
+        examples.append(
+            {
+                "messages": [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": summary},
+                ]
+            }
+        )
     
     # Fetch and add URL examples if needed
     if collected_urls:
