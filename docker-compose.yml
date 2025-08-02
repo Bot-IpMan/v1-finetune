@@ -7,44 +7,61 @@ services:
     volumes:
       - ./data:/app/data
       - /mnt/sdb/data/ai/models/model_output:/app/model_output
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Cache HF models
     environment:
       - PYTHONUNBUFFERED=1
-    # Train the model on the included sample data.  After training the container
-    # exits allowing dependent services to start.  You can override this
-    # command when running compose if you wish to customise the training.
-    # Use list form for command to avoid shell parsing issues.  This will
-    # fine‑tune the model on the provided sample dataset.  Modify or override
-    # these arguments to point at your own training data.  The command below
-    # downloads the base model from Hugging Face so the container requires
-    # Internet access.
+      - HF_HUB_CACHE=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface
+    networks:
+      - ai_network
+    # This is a one-time training job, not a service
+    # Remove healthcheck and use restart policy
     command:
       - python
       - train.py
       - --base_model_name
-      - Qwen/Qwen1.5-7B
+      - Qwen/Qwen2.5-0.5B-Instruct
       - --train_file
       - data/train.jsonl
       - --eval_file
       - data/eval.jsonl
       - --output_dir
       - /app/model_output
-      - --use_lora
       - --num_epochs
-      - "1"
+      - "3"  # Increased for better training
       - --per_device_batch_size
       - "1"
+      - --learning_rate
+      - "5e-5"
+      - --use_lora  
+    # Don't restart automatically - it's a one-time job
+    restart: "no"
 
   api:
     build:
       context: ./server
     volumes:
       - /mnt/sdb/data/ai/models/model_output:/app/model_output:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface:ro
     environment:
       - MODEL_PATH=/app/model_output
+      - BASE_MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
+      - HF_HUB_CACHE=/root/.cache/huggingface
     ports:
       - "8000:8000"
+    networks:
+      - ai_network
+    # Wait for training to complete before starting API
     depends_on:
       - finetune
+    restart: unless-stopped
+    # Add healthcheck for API
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
@@ -53,11 +70,25 @@ services:
     environment:
       # Disable authentication for ease of use in local setups
       - WEBUI_AUTH=false
+      
+      # Disable features that require internet
+      - ENABLE_RAG_WEB_SEARCH=false
+      - ENABLE_RAG_WEB_LOADER=false
+      - ENABLE_MODEL_FILTER=false
+      - OPENAI_API_BASE_URL=http://api:8000/v1
+      - OPENAI_API_KEY=dummy
+      - DEFAULT_MODELS=qwen-finetuned
     volumes:
       - openwebui_data:/data
+    networks:
+      - ai_network
     depends_on:
-      - finetune
       - api
+    restart: unless-stopped
+
+networks:
+  ai_network:
+    driver: bridge
 
 volumes:
   openwebui_data:

@@ -22,7 +22,7 @@ The high‑level workflow is unchanged:
     at a locally available model directory.  On CPU‑only machines the model is
     automatically loaded on the CPU to avoid meta tensor errors.
 4.  Optionally apply a LoRA adapter.
-5.  Preprocess the datasets using the tokenizer’s chat template.  The number
+5.  Preprocess the datasets using the tokenizer's chat template.  The number
     of worker processes used for tokenization is capped at the dataset size to
     work around an upstream issue where small datasets would trigger the
     message ``num_proc must be <= 1``.
@@ -48,6 +48,7 @@ import argparse
 import json
 import os
 import random
+import logging
 from typing import List, Dict, Any, Optional
 
 import torch
@@ -61,6 +62,10 @@ from transformers import (
 )
 
 from peft import LoraConfig, get_peft_model
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # When available the helper script can fetch text from remote URLs.  This import
 # is optional so that training on local files does not require requests/bs4.
@@ -148,7 +153,7 @@ def parse_args() -> argparse.Namespace:
         "--per_device_batch_size",
         type=int,
         default=1,
-        help="Per device (GPU) batch size.",
+        help="Per device (GPU/CPU) batch size.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -176,27 +181,66 @@ def parse_args() -> argparse.Namespace:
             " text files will be used."
         ),
     )
+    parser.add_argument(
+        "--config_file",
+        type=str,
+        default=None,
+        help="Path to YAML configuration file to load default parameters.",
+    )
     return parser.parse_args()
+
+
+def load_config_file(config_path: str) -> Dict[str, Any]:
+    """Load configuration from YAML file."""
+    try:
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except ImportError:
+        logger.warning("PyYAML not installed. Cannot load config file.")
+        return {}
+    except Exception as e:
+        logger.warning(f"Failed to load config file {config_path}: {e}")
+        return {}
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    """Validate command line arguments."""
+    if args.use_4bit and not torch.cuda.is_available():
+        logger.warning("4-bit quantization requires CUDA but no GPU available. Disabling 4-bit.")
+        args.use_4bit = False
+    
+    if args.offline and not args.model_path:
+        raise ValueError("Offline mode requires --model_path to point to a locally available model.")
+    
+    if args.lora_r <= 0 or args.lora_alpha <= 0:
+        raise ValueError("LoRA rank and alpha must be positive integers.")
+    
+    if args.learning_rate <= 0:
+        raise ValueError("Learning rate must be positive.")
 
 
 def get_datasets(train_file: Optional[str], eval_file: Optional[str]) -> Dict[str, Any]:
     """Load datasets from JSONL files."""
     data_files: Dict[str, str] = {}
-    if train_file:
+    if train_file and os.path.exists(train_file):
         data_files["train"] = train_file
-    if eval_file:
+    if eval_file and os.path.exists(eval_file):
         data_files["validation"] = eval_file
+    
     if not data_files:
         raise ValueError(
             "You must specify at least one of --train_file, --urls or --url_file "
             "to provide training data."
         )
+    
+    logger.info(f"Loading datasets from: {list(data_files.keys())}")
     ds = load_dataset("json", data_files=data_files)
     return ds
 
 
 def tokenize_function(
-    example: Dict[str, Any], tokenizer: AutoTokenizer
+    example: Dict[str, Any], tokenizer: AutoTokenizer, max_length: int = 2048
 ) -> Dict[str, Any]:
     """Convert a chat conversation into model input and labels.
 
@@ -215,7 +259,8 @@ def tokenize_function(
         return_attention_mask=True,
         return_tensors="pt",
         truncation=True,
-        max_length=2048,
+        max_length=max_length,
+        padding=False,  # Don't pad during tokenization, Trainer will handle this
     )
     input_ids = tokenized["input_ids"][0]
     attention_mask = tokenized["attention_mask"][0]
@@ -228,217 +273,259 @@ def tokenize_function(
     }
 
 
-def main() -> None:
-    args = parse_args()
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    if args.offline:
-        # Disable all network calls from Hugging Face libraries
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["HF_DATASETS_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
-    # If URLs are provided build a dataset on the fly.  Offline mode forbids network calls.
-    if args.urls or args.url_file:
-        if args.offline:
-            print(
-                "Offline mode specified; cannot fetch remote URLs. Please provide local text files instead."
-            )
-            return
+def collect_custom_data(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
+    """Collect custom training data from default directories."""
+    custom_text_dir = os.path.join("data", "custom", "texts")
+    custom_url_file = os.path.join("data", "custom", "urls.txt")
+    collected_urls: List[str] = []
+    collected_texts: List[str] = []
+    
+    # Read all text files in data/custom/texts
+    if os.path.isdir(custom_text_dir):
+        for fname in os.listdir(custom_text_dir):
+            fpath = os.path.join(custom_text_dir, fname)
+            if os.path.isfile(fpath) and fname.lower().endswith((".txt", ".md", ".html")):
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        text = f.read().strip()
+                        if text:  # Only add non-empty texts
+                            collected_texts.append(text)
+                            logger.info(f"Loaded text file: {fname}")
+                except Exception as e:
+                    logger.warning(f"Failed to read {fpath}: {e}")
+    
+    # Read URLs from data/custom/urls.txt
+    if os.path.exists(custom_url_file) and not args.offline:
+        try:
+            with open(custom_url_file, "r", encoding="utf-8") as f:
+                urls = [line.strip() for line in f.read().splitlines() if line.strip()]
+                collected_urls.extend(urls)
+                logger.info(f"Loaded {len(urls)} URLs from {custom_url_file}")
+        except Exception as e:
+            logger.warning(f"Failed to read {custom_url_file}: {e}")
+    
+    # If we found any texts or urls, build a dataset on the fly
+    if not (collected_texts or collected_urls):
+        return None, None
+    
+    tmp_train = os.path.join(args.output_dir, "custom_train.jsonl")
+    tmp_eval = os.path.join(args.output_dir, "custom_eval.jsonl")
+    
+    # Write text examples directly
+    examples: List[Dict[str, Any]] = []
+    for t in collected_texts:
+        prompt = f"Будь ласка, зроби короткий стислий виклад наступного тексту: {t}"
+        examples.append({
+            "messages": [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": ""},
+            ]
+        })
+    
+    # Fetch and add URL examples if needed
+    if collected_urls:
         if fetch_data_from_urls is None:
             raise RuntimeError(
                 "requests/bs4 are required for URL fetching but are not installed."
             )
-        # Parse URL list
-        urls: List[str] = []
-        if args.urls:
-            urls.extend(u.strip() for u in args.urls.split(",") if u.strip())
-        if args.url_file:
-            with open(args.url_file, "r", encoding="utf‑8") as f:
-                urls.extend(
-                    line.strip() for line in f.read().splitlines() if line.strip()
-                )
-        random.shuffle(urls)
-        if not urls:
-            raise ValueError("No URLs provided.")
-        train_path = os.path.join(args.output_dir, "train_urls.jsonl")
-        eval_path = os.path.join(args.output_dir, "eval_urls.jsonl")
-        fetch_data_from_urls(urls, train_path, eval_path)
-        train_file = train_path
-        eval_file = eval_path
-    else:
-        train_file = args.train_file
-        eval_file = args.eval_file
-
-    # If no explicit training data or URLs are provided, look for
-    # user‑supplied text files and url lists in the default data/custom
-    # directory.  This allows drop‑in fine‑tuning without specifying
-    # arguments.
-    if not (train_file or args.urls or args.url_file):
-        custom_text_dir = os.path.join("data", "custom", "texts")
-        custom_url_file = os.path.join("data", "custom", "urls.txt")
-        collected_urls: List[str] = []
-        collected_texts: List[str] = []
-        # Read all text files in data/custom/texts
-        if os.path.isdir(custom_text_dir):
-            for fname in os.listdir(custom_text_dir):
-                fpath = os.path.join(custom_text_dir, fname)
-                if os.path.isfile(fpath) and fname.lower().endswith(
-                    (".txt", ".md", ".html")
-                ):
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                        collected_texts.append(f.read())
-        # Read URLs from data/custom/urls.txt
-        if os.path.exists(custom_url_file):
-            with open(custom_url_file, "r", encoding="utf-8") as f:
-                collected_urls += [
-                    line.strip() for line in f.read().splitlines() if line.strip()
-                ]
-        # If we found any texts or urls, build a dataset on the fly
-        if collected_texts or collected_urls:
-            tmp_train = os.path.join(args.output_dir, "custom_train.jsonl")
-            tmp_eval = os.path.join(args.output_dir, "custom_eval.jsonl")
-            # Write text examples directly
-            examples: List[Dict[str, Any]] = []
-            for t in collected_texts:
-                prompt = (
-                    f"Будь ласка, зроби короткий стислий виклад наступного тексту: {t}"
-                )
-                examples.append(
-                    {
-                        "messages": [
-                            {"role": "user", "content": prompt},
-                            {"role": "assistant", "content": ""},
-                        ]
-                    }
-                )
-            # Fetch and add URL examples if needed
-            if collected_urls:
-                if fetch_data_from_urls is None:
-                    raise RuntimeError(
-                        "requests/bs4 are required for URL fetching but are not installed."
-                    )
-                _train_data, _eval_data = fetch_data_from_urls(
-                    collected_urls, tmp_train, tmp_eval
-                )
-                # Append url examples to examples list
-                examples += _train_data + _eval_data
-            # Split examples into train/eval
-            random.shuffle(examples)
-            split_idx = max(1, int(len(examples) * 0.8))
-            with open(tmp_train, "w", encoding="utf-8") as f:
-                for item in examples[:split_idx]:
-                    json.dump(item, f, ensure_ascii=False)
-                    f.write("\n")
-            with open(tmp_eval, "w", encoding="utf-8") as f:
-                for item in examples[split_idx:]:
-                    json.dump(item, f, ensure_ascii=False)
-                    f.write("\n")
-            train_file = tmp_train
-            eval_file = tmp_eval
-
-    # Load datasets
-    datasets = get_datasets(train_file, eval_file)
-
-    # Load tokenizer and model
-    # When offline, require a local model path
-    base_model_source = args.model_path or args.base_model_name
-    if args.offline and args.model_path is None:
-        print(
-            "Offline mode requires --model_path to point to a locally available pretrained model."
+        logger.info(f"Fetching data from {len(collected_urls)} URLs...")
+        _train_data, _eval_data = fetch_data_from_urls(
+            collected_urls, tmp_train, tmp_eval
         )
-        return
-    tokenizer = AutoTokenizer.from_pretrained(base_model_source, trust_remote_code=True)
-    # Make sure the tokenizer uses the correct padding side and tokens
-    tokenizer.pad_token = tokenizer.eos_token
+        # Append url examples to examples list
+        examples += _train_data + _eval_data
+    
+    # Split examples into train/eval
+    random.shuffle(examples)
+    split_idx = max(1, int(len(examples) * 0.8))
+    
+    os.makedirs(os.path.dirname(tmp_train), exist_ok=True)
+    with open(tmp_train, "w", encoding="utf-8") as f:
+        for item in examples[:split_idx]:
+            json.dump(item, f, ensure_ascii=False)
+            f.write("\n")
+    
+    with open(tmp_eval, "w", encoding="utf-8") as f:
+        for item in examples[split_idx:]:
+            json.dump(item, f, ensure_ascii=False)
+            f.write("\n")
+    
+    logger.info(f"Created custom datasets: {len(examples[:split_idx])} train, {len(examples[split_idx:])} eval examples")
+    return tmp_train, tmp_eval
 
-    # quantization config (use 4‑bit only when requested and GPU available)
+
+def setup_model_and_tokenizer(args: argparse.Namespace) -> tuple:
+    """Load and setup model and tokenizer."""
+    base_model_source = args.model_path or args.base_model_name
+    
+    logger.info(f"Loading tokenizer from {base_model_source}")
+    tokenizer = AutoTokenizer.from_pretrained(base_model_source, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    # Setup quantization config
     quantization_config = None
-    if args.use_4bit:
+    if args.use_4bit and torch.cuda.is_available():
+        logger.info("Using 4-bit quantization")
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-
-    # Decide on device_map: on GPU use 'auto', otherwise keep None so the model
-    # loads entirely on CPU.  Passing device_map="auto" on a CPU‑only machine
-    # triggers accelerate’s offloading logic and results in meta tensors.
-    if torch.cuda.is_available():
-        device_map = "auto"
-    else:
-        device_map = None
-
+    
+    # Setup device mapping
+    device_map = "auto" if torch.cuda.is_available() else None
+    
+    logger.info(f"Loading model from {base_model_source} (device_map={device_map})")
     try:
         model = AutoModelForCausalLM.from_pretrained(
             base_model_source,
             quantization_config=quantization_config,
             device_map=device_map,
             trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
         )
     except Exception as exc:
-        print(
-            f"Error loading base model '{base_model_source}': {exc}\n"
-            "If running offline, ensure --model_path points to a local model directory."
-        )
-        return
+        logger.error(f"Error loading base model '{base_model_source}': {exc}")
+        if args.offline:
+            logger.error("If running offline, ensure --model_path points to a local model directory.")
+        raise
+    
+    return model, tokenizer
 
-    # Optionally apply LoRA for parameter efficient training
-    if args.use_lora:
-        # prepare the model for k‑bit training if using quantization
-        if args.use_4bit:
-            # Import inside the branch to avoid pulling in bitsandbytes on CPU
-            from peft.tuners.lora import prepare_model_for_kbit_training
 
-            model = prepare_model_for_kbit_training(model)
-        lora_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+def setup_lora(model, args: argparse.Namespace):
+    """Setup LoRA if requested."""
+    if not args.use_lora:
+        return model
+    
+    logger.info("Setting up LoRA adapter")
+    
+    # Prepare the model for k‑bit training if using quantization
+    if args.use_4bit and torch.cuda.is_available():
+        from peft.tuners.lora import prepare_model_for_kbit_training
+        model = prepare_model_for_kbit_training(model)
+    
+    lora_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    return model
 
-    # Preprocess datasets.  Use at most one worker per example to avoid dataset
-    # library complaining when the dataset is tiny.  This fixes the issue where
-    # ``num_proc must be <= 1`` messages were emitted for small datasets.
+
+def process_datasets(datasets: Dict[str, Any], tokenizer: AutoTokenizer) -> Dict[str, Any]:
+    """Process datasets with tokenization."""
     processed_datasets: Dict[str, Any] = {}
+    
     for split in datasets.keys():
-        num_examples = (
-            len(datasets[split]) if hasattr(datasets[split], "__len__") else 1
-        )
+        logger.info(f"Processing {split} dataset...")
+        
+        num_examples = len(datasets[split]) if hasattr(datasets[split], "__len__") else 1
         # Use at most len(datasets[split]) workers but no more than available CPUs
         max_procs = os.cpu_count() or 1
         num_proc = min(max_procs, max(1, num_examples))
+        
         processed = datasets[split].map(
             lambda x: tokenize_function(x, tokenizer),
             remove_columns=datasets[split].column_names,
             num_proc=num_proc,
+            desc=f"Tokenizing {split}",
         )
         processed.set_format(
             type="torch",
             columns=["input_ids", "attention_mask", "labels"],
         )
         processed_datasets[split] = processed
+        logger.info(f"Processed {len(processed)} examples for {split}")
+    
+    return processed_datasets
 
-    # Determine whether to use CUDA.  When no GPU is available or when the user
-    # explicitly requested 4‑bit quantisation (which is unsupported without CUDA),
-    # disable CUDA entirely.  This prevents the Trainer from attempting to move
-    # meta tensors onto a non‑existent GPU and throwing a NotImplementedError.
-    use_cuda = torch.cuda.is_available() and not args.use_4bit
 
+def main() -> None:
+    args = parse_args()
+    
+    # Load config file if provided
+    if args.config_file:
+        config = load_config_file(args.config_file)
+        # Update args with config values (args take precedence)
+        for key, value in config.items():
+            if not hasattr(args, key) or getattr(args, key) is None:
+                setattr(args, key, value)
+    
+    validate_args(args)
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    logger.info(f"Training arguments: {vars(args)}")
+    
+    if args.offline:
+        # Disable all network calls from Hugging Face libraries
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["HF_DATASETS_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        logger.info("Running in offline mode")
+
+    # Determine training data sources
+    train_file, eval_file = args.train_file, args.eval_file
+    
+    # Handle URL-based data fetching
+    if args.urls or args.url_file:
+        if args.offline:
+            logger.error("Offline mode specified; cannot fetch remote URLs. Please provide local text files instead.")
+            return
+        
+        if fetch_data_from_urls is None:
+            raise RuntimeError("requests/bs4 are required for URL fetching but are not installed.")
+        
+        # Parse URL list
+        urls: List[str] = []
+        if args.urls:
+            urls.extend(u.strip() for u in args.urls.split(",") if u.strip())
+        if args.url_file:
+            with open(args.url_file, "r", encoding="utf-8") as f:
+                urls.extend(line.strip() for line in f.read().splitlines() if line.strip())
+        
+        if not urls:
+            raise ValueError("No URLs provided.")
+        
+        random.shuffle(urls)
+        train_path = os.path.join(args.output_dir, "train_urls.jsonl")
+        eval_path = os.path.join(args.output_dir, "eval_urls.jsonl")
+        logger.info(f"Fetching data from {len(urls)} URLs...")
+        fetch_data_from_urls(urls, train_path, eval_path)
+        train_file, eval_file = train_path, eval_path
+    
+    # Handle custom data directory
+    elif not train_file:
+        train_file, eval_file = collect_custom_data(args)
+    
+    # Load datasets
+    datasets = get_datasets(train_file, eval_file)
+    
+    # Load model and tokenizer
+    model, tokenizer = setup_model_and_tokenizer(args)
+    
+    # Setup LoRA if requested
+    model = setup_lora(model, args)
+    
+    # Process datasets
+    processed_datasets = process_datasets(datasets, tokenizer)
+    
+    # Setup training arguments with corrected logic
+    has_cuda = torch.cuda.is_available()
+    use_mixed_precision = has_cuda and not args.use_4bit  # Only use mixed precision on GPU without 4bit
+    
+    logger.info(f"Training setup - CUDA available: {has_cuda}, Mixed precision: {use_mixed_precision}")
+    
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_batch_size,
@@ -449,11 +536,14 @@ def main() -> None:
         warmup_ratio=0.03,
         lr_scheduler_type="cosine",
         logging_steps=10,
+        eval_strategy="epoch" if "validation" in processed_datasets else "no",
         save_strategy="epoch",
-        fp16=use_cuda,
+        fp16=use_mixed_precision,  # Only use fp16 on GPU without 4bit
         bf16=False,
         report_to="none",
-        no_cuda=not use_cuda,
+        no_cuda=not has_cuda,
+        dataloader_pin_memory=has_cuda,
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
@@ -464,18 +554,22 @@ def main() -> None:
         tokenizer=tokenizer,
     )
 
+    logger.info("Starting training...")
     trainer.train()
 
-    # Save the fine‑tuned model.  If LoRA was used only the adapter weights are stored.
+    # Save the fine‑tuned model
+    logger.info(f"Saving model to {args.output_dir}")
     if args.use_lora:
         model.save_pretrained(args.output_dir)
-        # also save base model name so the inference script can reconstruct the model
-        with open(
-            os.path.join(args.output_dir, "base_model_name.txt"), "w", encoding="utf‑8"
-        ) as f:
+        # Save base model name for inference script
+        with open(os.path.join(args.output_dir, "base_model_name.txt"), "w", encoding="utf-8") as f:
             f.write(args.base_model_name)
+        logger.info("Saved LoRA adapter weights")
     else:
         trainer.save_model(args.output_dir)
+        logger.info("Saved full model")
+    
+    logger.info("Training completed successfully!")
 
 
 if __name__ == "__main__":
