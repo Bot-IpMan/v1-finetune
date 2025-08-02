@@ -29,11 +29,11 @@ minimal OpenAI‑compatible API server.
     pip install -r requirements.txt
     ```
 
-2.  Fetch some training data from the web and fine‑tune the model
+2.  Fetch some training data from the web and fine‑tune the [Qwen/Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct) model
 
     ```sh
     python train.py \
-      --base_model_name Qwen/Qwen1.5-7B \
+      --base_model_name Qwen/Qwen2.5-VL-7B-Instruct \
       --urls https://en.wikipedia.org/wiki/Artificial_intelligence,https://en.wikipedia.org/wiki/Machine_learning \
       --output_dir model_output \
       --use_lora \
@@ -94,6 +94,20 @@ standard causal language modelling regardless of format.
 Після запуску `docker compose up` модель буде натренована, API‑сервер
 автоматично запуститься на `http://localhost:8000/v1`, а Open WebUI буде
 доступним за адресою `http://localhost:8080`.
+
+### Завантаження LoRA через змінні середовища
+
+Сервіс `openwebui` монтує результати навчання до `/app/model_output` і
+використовує змінні середовища `MODEL_ID` та `LLM_ADAPTER`, щоб одразу
+підвантажити базову модель та адаптер LoRA. За замовчуванням у
+`docker-compose.yml` вказано:
+
+```yaml
+MODEL_ID=Qwen/Qwen2.5-VL-7B-Instruct
+LLM_ADAPTER=/app/model_output
+```
+
+За потреби змініть ці значення на власні шляхи або ідентифікатори моделі.
 
 ## Citation
 
