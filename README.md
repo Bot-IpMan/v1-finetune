@@ -50,6 +50,21 @@ minimal OpenAI‑compatible API server.
     створіть новий зв'язок та у полі URL вкажіть `http://localhost:8000/v1`.
     Після збереження оберіть модель у меню та почніть спілкування.
 
+## Dataset formats
+
+`train.py` understands several JSONL layouts and will automatically
+convert them into training examples:
+
+- `{"messages": [...]}` – a list of chat turns compatible with the
+  tokenizer's chat template.
+- `{"prompt": "...", "completion": "..."}` – converted into a two turn
+  user→assistant conversation.
+- `{"text": "..."}` – treated as plain text for generic language model
+  fine‑tuning.
+
+Every example is tokenized so that labels mirror the input, enabling
+standard causal language modelling regardless of format.
+
 ## Підтримка офлайн/онлайн режимів
 
 Скрипт `train.py` може працювати як з підключенням до Інтернету, так і без нього:
@@ -86,4 +101,4 @@ The inference server is compatible with any client that speaks the
 OpenAI Chat API as described in the official Open WebUI docs
 【362441291072753†L54-L131】.  Training code uses the `Trainer` class from
 HuggingFace Transformers and applies the chat template provided by the
-tokenizer to assemble multi‑turn conversations【523432065786204†L294-L311】.# Test change
+tokenizer to assemble multi‑turn conversations【523432065786204†L294-L311】.
