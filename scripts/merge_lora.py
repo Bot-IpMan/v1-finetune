@@ -7,7 +7,7 @@ the resulting model as a complete standalone model that doesn't require
 the original base model or PEFT library for inference.
 
 Usage:
-    python merge_lora.py --base_model Qwen/Qwen2.5-VL-7B-Instruct \
+    python merge_lora.py --base_model Qwen/Qwen2.5-Coder-7B \
                         --lora_path /path/to/lora/adapter \
                         --output_path /path/to/merged/model
 """
