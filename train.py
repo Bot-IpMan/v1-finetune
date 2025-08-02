@@ -410,7 +410,24 @@ def setup_model_and_tokenizer(args: argparse.Namespace) -> tuple:
     base_model_source = args.model_path or args.base_model_name
     
     logger.info(f"Loading tokenizer from {base_model_source}")
-    tokenizer = AutoTokenizer.from_pretrained(base_model_source, trust_remote_code=True)
+    # Hugging Face libraries default to using `~/.cache` which can be
+    # read-only in some environments (e.g. containers or restricted
+    # systems).  We allow the cache directory to be overridden via the
+    # HF_HOME or TRANSFORMERS_CACHE environment variables; otherwise we
+    # fall back to a cache inside the output directory which should be
+    # writable.  This ensures the model/tokenizer can be loaded even when
+    # the default cache location is unavailable.
+    cache_dir = os.environ.get("HF_HOME") or os.environ.get("TRANSFORMERS_CACHE")
+    if cache_dir is None:
+        cache_dir = os.path.join(args.output_dir, "hf_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model_source,
+        trust_remote_code=True,
+        cache_dir=cache_dir,
+        local_files_only=args.offline,
+    )
     tokenizer.pad_token = tokenizer.eos_token
     
     # Setup quantization config
@@ -435,6 +452,8 @@ def setup_model_and_tokenizer(args: argparse.Namespace) -> tuple:
             device_map=device_map,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            cache_dir=cache_dir,
+            local_files_only=args.offline,
         )
     except Exception as exc:
         logger.error(f"Error loading base model '{base_model_source}': {exc}")
